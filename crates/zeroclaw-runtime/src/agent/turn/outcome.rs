@@ -123,7 +123,9 @@ impl ContextWindowExceeded {
 
     fn remediation_with(&self, render: CliStringRenderer) -> String {
         match self.model_context_window_source {
-            ModelContextWindowSource::Configured => {
+            // A discovered window is evidence about the model, so it reads like
+            // a configured one; only the compatibility stub is an assumption.
+            ModelContextWindowSource::Configured | ModelContextWindowSource::Discovered => {
                 render("turn-context-window-exceeded-error", &[])
             }
             ModelContextWindowSource::CompatibilityFallback => {
