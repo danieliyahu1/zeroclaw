@@ -917,6 +917,7 @@ mod cost_usd_regression_tests {
                 context_token_budget: 32_000,
                 model_context_window_source:
                     zeroclaw_config::schema::ModelContextWindowSource::Configured,
+                has_authoritative_budget: true,
             },
             temperature: None,
             approval: None,

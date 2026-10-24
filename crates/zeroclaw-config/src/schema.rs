@@ -3925,6 +3925,13 @@ pub struct ResolvedContextLimits {
     pub model_context_window: usize,
     pub model_context_window_source: ModelContextWindowSource,
     pub context_token_budget: usize,
+    /// Whether a local budget policy may act on this route at all.
+    ///
+    /// A capacity the operator configured, or an explicit budget or ratio, is
+    /// evidence-backed. The compatibility fallback alone is not: it exists so
+    /// budget arithmetic has an operand, and must never trim or refuse by
+    /// itself. `false` means "capacity unknown, no local policy".
+    pub has_authoritative_budget: bool,
 }
 
 impl ResolvedContextLimits {
@@ -3964,6 +3971,9 @@ impl ResolvedContextLimits {
             model_context_window,
             model_context_window_source: capacity.source,
             context_token_budget: budget.min(model_context_window),
+            // A caller-supplied budget is operator intent; the stub alone is not.
+            has_authoritative_budget: capacity.source == ModelContextWindowSource::Configured
+                || budget > 0,
         }
     }
 
@@ -4010,12 +4020,14 @@ impl ResolvedRuntime {
         };
 
         // Preserve the established disable sentinel before applying any
-        // ratio, pruning floor, or positive-value normalization.
+        // ratio, pruning floor, or positive-value normalization. The operator
+        // asked for this route explicitly, so capacity still applies.
         if self.max_context_tokens == Some(0) {
             return ResolvedContextLimits {
                 model_context_window,
                 model_context_window_source: self.model_context_window_source,
                 context_token_budget: 0,
+                has_authoritative_budget: true,
             };
         }
 
@@ -4042,10 +4054,18 @@ impl ResolvedRuntime {
         // Capacity is a hard invariant for every positive effective budget.
         // Preserve zero as the explicit proactive-trimming disable sentinel.
         context_token_budget = context_token_budget.min(model_context_window);
+        // An unconfigured capacity and no operator budget or ratio means the
+        // route has no evidence-backed limit at all: the 32k compatibility
+        // stub must not drive trimming or refusal on its own.
+        let has_authoritative_budget = self.model_context_window_source
+            == ModelContextWindowSource::Configured
+            || self.max_context_tokens.is_some()
+            || ratio.is_some();
         ResolvedContextLimits {
             model_context_window,
             model_context_window_source: self.model_context_window_source,
             context_token_budget,
+            has_authoritative_budget,
         }
     }
 
@@ -29545,6 +29565,36 @@ mod tests {
         let limits = r.context_limits();
         assert_eq!(limits.context_token_budget, 16_000);
         assert_eq!(limits.model_context_window, 32_000);
+    }
+
+    #[::core::prelude::v1::test]
+    fn unconfigured_capacity_is_not_an_authoritative_budget() {
+        use super::{ModelContextWindowSource, UNCONFIGURED_CONTEXT_WINDOW_FALLBACK};
+
+        // No window and no operator budget: the 32k stub may not trim or refuse.
+        let limits = ResolvedRuntime::default().context_limits();
+        assert_eq!(
+            limits.model_context_window,
+            UNCONFIGURED_CONTEXT_WINDOW_FALLBACK
+        );
+        assert!(!limits.has_authoritative_budget);
+
+        // A configured window is evidence.
+        let configured = ResolvedRuntime {
+            model_context_window: 1_000_000,
+            model_context_window_source: ModelContextWindowSource::Configured,
+            ..ResolvedRuntime::default()
+        };
+        assert!(configured.context_limits().has_authoritative_budget);
+
+        // An explicit budget is operator intent even without a known window.
+        let budgeted = ResolvedRuntime {
+            max_context_tokens: Some(200_000),
+            ..ResolvedRuntime::default()
+        };
+        let limits = budgeted.context_limits();
+        assert!(limits.has_authoritative_budget);
+        assert_eq!(limits.context_token_budget, 200_000);
     }
 
     #[::core::prelude::v1::test]
