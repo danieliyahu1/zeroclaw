@@ -1061,7 +1061,9 @@ fn context_window_exceeded_error(
     );
     ContextWindowExceeded {
         estimated_tokens: usize::try_from(tokens).unwrap_or(usize::MAX),
+        model_provider: provider_name.to_string(),
         model_context_window: limits.model_context_window,
+        model_context_window_source: limits.model_context_window_source,
         raw_estimated_tokens,
         system_tokens,
         tool_schema_tokens,
